@@ -29,8 +29,26 @@ public final class TraceabilityServer {
         var source = Database.dataSource(url);
         Database.initialize(source);
         if (Arrays.asList(args).contains("--demo")) Database.seedDemo(source);
-        var server = create(source, host, port).start();
+        String restHost = System.getenv().getOrDefault("REST_HOST", "127.0.0.1");
+        int restPort = Integer.parseInt(System.getenv().getOrDefault("REST_PORT", "8080"));
+        if (restPort < 1 || restPort > 65535) throw new IllegalArgumentException("REST_PORT must be 1–65535");
+        var rest = new AnimalRestServer(source, restHost, restPort);
+        final Server server;
+        try {
+            server = create(source, host, port).start();
+        } catch (Exception exception) {
+            rest.close();
+            throw exception;
+        }
+        try {
+            rest.start();
+        } catch (RuntimeException exception) {
+            rest.close();
+            server.shutdownNow();
+            throw exception;
+        }
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            rest.close();
             server.shutdown();
             try {
                 if (!server.awaitTermination(5, TimeUnit.SECONDS)) server.shutdownNow();
@@ -40,6 +58,7 @@ public final class TraceabilityServer {
             }
         }));
         System.out.printf("Traceability gRPC listening on %s:%d%n", host, server.getPort());
+        System.out.printf("Animal REST listening on http://%s:%d/api/animals%n", restHost, rest.port());
         server.awaitTermination();
     }
 }

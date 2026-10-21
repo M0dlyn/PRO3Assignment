@@ -1,34 +1,43 @@
-# PRO3 Assignment — Part 2
+# PRO3 Assignment — Parts 2 and 3
 
-A Java 21 gRPC service for slaughterhouse traceability, backed by a persistent H2 SQL database. It retrieves all animal registration numbers potentially involved in a product, and all products potentially involving an animal.
+Java 21 services for slaughterhouse animal registration and traceability, backed by a persistent H2 SQL database. Part 3 registers and reads animals through REST; Part 2 retrieves product origins and affected products through gRPC.
 
-## Run
+## Build and run
 
-Prerequisites: **JDK 21** and **Maven 3.9+**. The first build requires internet access to Maven Central. No separate database server, Docker, or IDE plugin is needed.
+Prerequisites: **JDK 21** and **Maven 3.9+**. The first build downloads dependencies from Maven Central. No separate database server or Docker is needed.
 
 ```sh
 mvn clean verify
 java -jar target/traceability-1.0.0.jar --demo
 ```
 
-The server listens on `127.0.0.1:9090`. The database is saved under `data/traceability.mv.db`, relative to the working directory. `--demo` loads synthetic sample data only if the animal table is empty. Start without `--demo` to use existing records (or create an empty database). Stop with Ctrl+C. Do not start two processes against the same database file.
+One process starts **REST at http://127.0.0.1:8080/api/animals** and **gRPC at 127.0.0.1:9090**. Records persist in `data/traceability.mv.db`, relative to the working directory. Stop with Ctrl+C. Restart from the same directory to retain the database. Do not launch two application processes against the same file.
 
-In a second terminal, from the repository directory:
+`--demo` loads synthetic sample data only if the animal table is empty. Omit it to start an empty database or use existing records. Existing Part 2 databases are upgraded without resetting data; their missing farm values remain null.
+
+## Part 3 REST API
+
+| Request | Purpose |
+| --- | --- |
+| `POST /api/animals` | Register arrival date, weight, registration number and origin (farm) |
+| `GET /api/animals/{registrationNumber}` | Read one animal |
+| `GET /api/animals?arrivalDate=2026-10-21` | Read all animals arriving on a date |
+| `GET /api/animals?origin=North%20Farm` | Read all animals from a farm |
+| `GET /api/animals` | Read all animals; filters can also be combined |
 
 ```sh
-java -cp target/traceability-1.0.0.jar dk.via.pro3.TraceabilityClient product P001
-# A001
-# A002
+curl -i -X POST http://127.0.0.1:8080/api/animals \
+  -H 'Content-Type: application/json' \
+  -d '{"registrationNumber":"DK1001","arrivalDate":"2026-10-21","arrivalWeightKg":120.125,"origin":"North Farm","species":"pig"}'
 
-java -cp target/traceability-1.0.0.jar dk.via.pro3.TraceabilityClient animal A001
-# P001
-# P002
-
-java -cp target/traceability-1.0.0.jar dk.via.pro3.TraceabilityClient animal A004
-# No matching products
+curl http://127.0.0.1:8080/api/animals/DK1001
 ```
 
-## API
+A successful registration returns `201 Created`, a `Location` header and the stored details. Duplicate IDs return `409 Conflict`. Collections return sorted JSON arrays, including an empty array for no matches. New registrations are immediately visible to gRPC because both APIs use the same database.
+
+See the [REST guide](docs/rest-api.md) for validation, error statuses, and curl examples. Import the [OpenAPI contract](docs/openapi.json) into Postman. No graphical UI is required or included.
+
+## Part 2 gRPC API
 
 Contract: [`src/main/proto/traceability.proto`](src/main/proto/traceability.proto). Maven generates Java messages and client/server stubs from this file. Both methods are unary RPCs; replies are distinct and sorted by identifier.
 
@@ -60,38 +69,50 @@ If animals A001 and A002 contributed to B001, every product using B001 is potent
 
 A batch represents one filling/use of a tray. Its historical membership must remain fixed once used for packing; parts must not be deleted from traceability history when physically consumed. Future station writers must enforce this rule. The Part 2 API is read-only.
 
-## Architecture and scope
+## Architecture and tests
 
-- [Updated C1, C2 and C3 diagrams](docs/architecture.md) — rendered by GitHub from Mermaid source.
-- [Database model, constraints and query design](docs/database.md).
-- [Tests and requirement coverage](docs/testing.md).
-- [Original Part 1 diagrams](docs/part1/).
+- [Updated C1, C2 and C3 diagrams](docs/architecture.md), with explicit implemented/planned boundaries.
+- [Database model and upgrade behavior](docs/database.md).
+- [JUnit coverage and manual test guide](docs/testing.md).
+- [Original Part 1 diagrams](docs/part1/) and [Part 2 architecture snapshot](docs/architecture-part2.md).
 
-Part 2 implements the central query application and its database. The three station applications, local stores, broker and asynchronous ingestion remain architectural context from Part 1; they are **not implemented here**. SQL fixtures populate the database for this part. No responses are hardcoded in the service.
+`mvn clean verify` runs actual HTTP and gRPC calls against real SQL databases. Tests cover lookups, validation, duplicates (including concurrent requests), legacy schema upgrades, persistence across restart, and REST/gRPC interoperability. GitHub Actions runs the same build.
 
-Stations are designed to continue local work during network outages and later synchronize through the broker. The central query service only knows data already received: an empty response is not a guarantee that no unsynchronized products exist. The future ingestion path must preserve batch history and handle duplicate/out-of-order events before this can be a production recall system.
+Part 3 implements animal registration only. Cutting/packing writes, station-local offline storage, outboxes, broker and event ingestion remain planned. REST registration requires a reachable server. This local demo uses plaintext HTTP/gRPC and loopback listeners; externally deployed services would need authentication and TLS.
 
 ## Configuration
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `DB_URL` | `jdbc:h2:file:./data/traceability` | H2 JDBC URL |
-| `GRPC_HOST` | `127.0.0.1` | Server bind address |
-| `GRPC_PORT` | `9090` | Server port |
-| `GRPC_TARGET` | `127.0.0.1:9090` | Demo client's server target |
+| `DB_URL` | `jdbc:h2:file:./data/traceability` | Shared H2 JDBC URL |
+| `REST_HOST` | `127.0.0.1` | REST bind address |
+| `REST_PORT` | `8080` | REST port |
+| `GRPC_HOST` | `127.0.0.1` | gRPC bind address |
+| `GRPC_PORT` | `9090` | gRPC port |
+| `GRPC_TARGET` | `127.0.0.1:9090` | Demo client's target |
 
-This coursework demo uses plaintext gRPC and a local embedded database. External authenticated access in the architectural model is a deployment requirement, not an implemented feature. Keep the default loopback binding; external deployment needs TLS and authorization. Reflection is enabled for API exploration.
+## gRPC demonstration
+
+With the application running, use another terminal:
+
+```sh
+java -cp target/traceability-1.0.0.jar dk.via.pro3.TraceabilityClient product P001
+# A001, A002 (one per line)
+java -cp target/traceability-1.0.0.jar dk.via.pro3.TraceabilityClient animal A001
+# P001, P002 (one per line)
+```
 
 ## Project layout
 
 ```text
-src/main/proto/                  gRPC contract
-src/main/java/dk/via/pro3/        Server, service, repository, database, demo client
-src/main/resources/schema.sql    Relational schema
-src/main/resources/demo.sql      Synthetic traceability fixture
-src/test/java/dk/via/pro3/        JUnit integration tests over real TCP gRPC
-docs/                            C4 diagrams, database design, test guide, Part 1 images
-.github/workflows/ci.yml          Java 21 build and test workflow
+src/main/proto/                    Part 2 gRPC contract
+src/main/java/dk/via/pro3/          REST/gRPC adapters, services, repositories, bootstrap and demo client
+src/main/resources/schema.sql      Original relational schema
+src/main/resources/migration-v2.sql  Additive Part 3 origin migration and indexes
+src/main/resources/demo.sql        Synthetic sample data
+src/test/java/dk/via/pro3/          HTTP/gRPC integration tests
+docs/                            C4 views, API contract, database and test guides
+.github/workflows/ci.yml           Java 21 CI build
 ```
 
-Technical references: [gRPC Java tutorial](https://grpc.io/docs/languages/java/basics/), [H2 documentation](https://h2database.com/html/features.html).
+Technical references: [gRPC Java](https://grpc.io/docs/languages/java/basics/), [H2](https://h2database.com/html/features.html), [JDK HTTP server](https://docs.oracle.com/en/java/javase/21/docs/api/jdk.httpserver/com/sun/net/httpserver/HttpServer.html).

@@ -1,9 +1,9 @@
 -- Synthetic data. Never represents real animals, customers or shipments.
-INSERT INTO animal VALUES
- ('A001', 'pig', 120.000, DATE '2026-10-01'),
- ('A002', 'pig', 125.000, DATE '2026-10-01'),
- ('A003', 'pig', 118.000, DATE '2026-10-02'),
- ('A004', 'pig', 130.000, DATE '2026-10-03');
+INSERT INTO animal (registration_number, species, arrival_weight_kg, arrival_date, origin) VALUES
+ ('A001', 'pig', 120.000, DATE '2026-10-01', 'North Farm'),
+ ('A002', 'pig', 125.000, DATE '2026-10-01', 'South Farm'),
+ ('A003', 'pig', 118.000, DATE '2026-10-02', 'North Farm'),
+ ('A004', 'pig', 130.000, DATE '2026-10-03', 'West Farm');
 INSERT INTO part_type VALUES ('leg'), ('loin');
 INSERT INTO tray VALUES ('T001', 40.000), ('T002', 30.000);
 INSERT INTO tray_batch VALUES

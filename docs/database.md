@@ -1,4 +1,4 @@
-# Database design
+# Database design — Parts 2 and 3
 
 H2 runs embedded in the central Java process and persists to disk by default. JDBC prepared statements execute every lookup against SQL tables. Each request uses a single repeatable-read transaction for its existence check and result query. Connections, statements and result sets are closed with try-with-resources.
 
@@ -36,7 +36,7 @@ The association table materializes the many-to-many relationship already present
 
 Primary/foreign keys prevent orphan traceability links. A composite foreign key `(batch_id, part_type)` ensures a part's type matches its batch. Positive checks protect weights, capacities and requirement quantities. The product–batch composite primary key prevents duplicate associations. Indexes support lookup by animal, batch and product.
 
-The read-only Part 2 service does not implement station write operations. Aggregate tray capacity, recipe satisfaction, immutable closed-batch membership and the requirement that a finished product has at least one batch need validation in those future write transactions. The schema permits temporarily missing child rows so that a known entity without projected relationships can return an empty result. These states must not be treated as complete recall evidence.
+The Part 2 traceability API is read-only. Part 3 adds validated animal INSERTs, but does not implement cutting/packing write operations. Aggregate tray capacity, recipe satisfaction, immutable closed-batch membership and the requirement that a finished product has at least one batch need validation in those future write transactions. The schema permits temporarily missing child rows so that a known entity without projected relationships can return an empty result. These states must not be treated as complete recall evidence.
 
 ## Query paths
 
@@ -56,6 +56,14 @@ A004 has arrived but has no registered parts yet. P001 has two source batches. D
 
 ## Initialization and persistence
 
-`schema.sql` creates missing tables and indexes at startup; it is an idempotent version-1 schema bootstrap, not a migration system. `--demo` runs `demo.sql` in one transaction only when no animals exist. It does not overwrite existing records or repair a partially populated custom database. Without `--demo`, no sample data is inserted. Future schema evolution should use versioned migrations.
+`schema.sql` creates missing tables and indexes at startup; it is an idempotent version-1 schema bootstrap, not a migration system. `--demo` runs `demo.sql` in one transaction only when no animals exist. It does not overwrite existing records or repair a partially populated custom database. Without `--demo`, no sample data is inserted. Part 3 runs the additive `migration-v2.sql` after the bootstrap; future schema evolution should use a migration history tool.
 
 Restarting the service from the same working directory reopens the same file. Generated database files are ignored by Git; the schema and synthetic seed script are version-controlled.
+
+## Part 3 animal registration
+
+The additive migration adds nullable `animal.origin VARCHAR(200)` plus indexes on `arrival_date` and `origin`. Null represents an unknown origin on an existing Part 2 record. The migration is idempotent and never drops or reseeds existing data. New REST registrations require a nonblank farm, even though the database column allows null for legacy compatibility.
+
+`AnimalRepository` inserts the four required fields and optional species with prepared statements. `AnimalRegistrationService` checks date validity, text lengths and decimal weight bounds before insertion. The primary key prevents duplicate registration numbers, including racing requests; duplicate SQL state 23505 becomes HTTP 409. A single INSERT commits atomically before HTTP success.
+
+Read queries use primary-key lookup or optional prepared equality predicates for date and origin, combined using AND and ordered by registration number. Origin matching is case-sensitive. Weights remain `DECIMAL(12,3)` and are JSON numbers in REST; the unchanged gRPC API retains decimal strings. Both APIs share the same database through one Java process.

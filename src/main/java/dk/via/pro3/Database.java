@@ -10,7 +10,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Objects;
 
-/** Initializes the central read database; no station/network dependency. */
+/** Initializes the central database; no station/network dependency. */
 public final class Database {
     private Database() {}
 
@@ -25,6 +25,7 @@ public final class Database {
     public static void initialize(DataSource source) throws SQLException {
         try (var connection = source.getConnection()) {
             script(connection, "/schema.sql");
+            script(connection, "/migration-v2.sql");
         }
     }
 

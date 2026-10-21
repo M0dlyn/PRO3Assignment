@@ -1,97 +1,95 @@
-# Updated architecture — Part 2
+# Architecture — Parts 2 and 3
 
-These C4 views refine the supplied Part 1 architecture. Solid arrows labeled **direct** represent synchronous calls; arrows labeled **indirect** represent asynchronous messages. Boxes explicitly identify which components exist in Part 2. The station and broker design is retained so local work can continue through a network outage.
+Part 3 adds animal registration and lookup over REST. The existing gRPC traceability interface remains available. Both interfaces run in one Java process and share a persistent H2 database. The [Part 2 views](architecture-part2.md) and [original Part 1 diagrams](part1/) are retained for comparison.
 
 ## C1 — System context
 
 ```mermaid
 flowchart LR
-    receiving["Receiving operator<br/>Registers and weighs animals"]
+    receiving["Receiving operator<br/>Registers animal arrival, weight, number and farm<br/>Looks up registrations"]
     cutting["Cutting operator<br/>Registers parts and tray batches"]
-    packing["Packing operator<br/>Packs and registers products"]
-    external["Authorized external recall user"]
-    system["Slaughterhouse Traceability System<br/>Tracks animal origins and potentially affected products"]
-    receiving -->|Registers animals| system
-    cutting -->|Registers parts and batches| system
-    packing -->|Registers products and source batches| system
-    external -->|Requests product origins or animal recall results| system
-    system -->|Returns animal registration numbers or affected products| external
+    packing["Packing operator<br/>Registers products and source batches"]
+    external["External recall user<br/>Finds possible animal origins and affected products"]
+    system["Slaughterhouse System<br/>Animal registration and traceability"]
+    receiving <-->|Registers and reads animal details by ID, date or farm| system
+    cutting -->|Part and batch registration - future| system
+    packing -->|Product registration - future| system
+    external <-->|Traceability requests and results| system
 ```
 
-The external actor represents the intended system context. Part 2 demonstrates that interface with a local gRPC client; externally authenticated deployment remains future work.
+The receiving use cases now have a working REST API; no graphical UI is required. External authorization remains a deployment requirement, not a feature implemented in this coursework demo.
 
 ## C2 — Container view
 
 ```mermaid
 flowchart TB
-    ro[Receiving operator]
-    co[Cutting operator]
-    po[Packing operator]
-    user[External recall user]
-    client["Recall client<br/>Java demo client or Postman<br/>Implemented for local demonstration"]
-    subgraph system[Slaughterhouse Traceability System]
-        receiving["Receiving application<br/>Planned"]
-        cutting["Cutting application<br/>Planned"]
-        packing["Packing application<br/>Planned"]
-        rdb[("Receiving local store + outbox<br/>Planned")]
-        cdb[("Cutting local store + outbox<br/>Planned")]
-        pdb[("Packing local store + outbox<br/>Planned")]
-        broker["Message broker<br/>Planned; technology unspecified"]
-        central["Central application<br/>Java 21, gRPC<br/>Query service implemented<br/>Event ingestion planned"]
-        db[("Central traceability database<br/>H2 via JDBC<br/>Implemented; embedded, disk persisted")]
+    operator[Receiving operator]
+    recall[Recall user]
+    restClient["REST client<br/>curl, Postman or HTTP client<br/>Direct registration and lookup today"]
+    grpcClient["gRPC client<br/>Bundled Java client or Postman"]
+    subgraph system[Slaughterhouse System]
+        app["Registration and traceability application<br/>One Java 21 process<br/>REST HTTP JSON :8080 - Part 3<br/>gRPC HTTP/2 :9090 - Part 2"]
+        db[("Shared H2 database<br/>Embedded in application process<br/>Persistent file storage")]
+        station["Offline station applications<br/>Receiving, cutting and packing<br/>Planned"]
+        local[("Station-local storage and outboxes<br/>Planned")]
+        broker["Message broker<br/>Planned"]
     end
-    ro --> receiving
-    co --> cutting
-    po --> packing
-    receiving <-->|Direct local reads/writes| rdb
-    cutting <-->|Direct local reads/writes| cdb
-    packing <-->|Direct local reads/writes| pdb
-    receiving -.->|Indirect saved updates when connected| broker
-    cutting -.->|Indirect saved updates when connected| broker
-    packing -.->|Indirect saved updates when connected| broker
-    broker -.->|Indirect event delivery; planned| central
-    user --> client
-    client <-->|Direct gRPC over HTTP/2| central
-    central <-->|Direct JDBC SQL queries; schema/demo initialization| db
+    operator --> restClient
+    restClient <-->|Direct HTTP JSON| app
+    recall --> grpcClient
+    grpcClient <-->|Direct protobuf RPC| app
+    app <-->|Direct JDBC queries and registration inserts| db
+    station <-->|Local reads and writes - planned| local
+    station -.->|Indirect queued updates on reconnection - planned| broker
+    broker -.->|Event projection consumer - planned| app
 ```
 
-The embedded database is a logical data-store container, not a separately launched server. Stations save operational data and outgoing events locally before trying to synchronize. A future consumer projects the events into the central database. Queries do not call the stations or depend on the broker being online, but results may lag unsynchronized local activity. Part 2 uses explicit SQL demo initialization instead of implementing that event flow.
+**Deployment decision:** rather than opening the same embedded database file from two separate processes, both APIs share one application and `DataSource`. A REST registration is immediately visible to the gRPC service. H2 is drawn as a logical data store; it does not require a separate server. HTTP and gRPC handlers use separate threads and short-lived JDBC connections.
 
-## C3 — Components of the central application
+**Offline boundary:** the Part 1 station-local storage, outbox and broker architecture remains future work. This Part 3 REST implementation requires a reachable server to register an animal. It does not claim to satisfy the entire system's offline station workflow. Future ingestion must validate and deduplicate events and preserve tray-batch history; recall results remain limited to records already in the central database.
+
+## C3 — Application components
 
 ```mermaid
 flowchart TB
-    client["External gRPC client<br/>Generated blocking stub or Postman"]
-    broker["Message broker<br/>Planned"]
-    db[("H2 database<br/>Animals, parts, batches, products and links")]
-    subgraph central[Central application — Java process]
-        bootstrap["TraceabilityServer<br/>Configures bind address; starts/stops Netty gRPC"]
-        reflection["gRPC reflection service<br/>Exposes protobuf descriptors"]
-        service["TraceabilityService<br/>Validates identifiers; maps records and status codes"]
-        repository["TraceabilityRepository<br/>Prepared SQL joins; deduplication; consistent read transaction"]
-        database["Database<br/>Builds JDBC DataSource; initializes schema; optional demo seed"]
-        ingest["Event consumer / projection writer<br/>Planned; not implemented"]
+    http["REST client"]
+    grpc["gRPC client"]
+    db[(H2 database)]
+    subgraph app[Registration and traceability application]
+        bootstrap["TraceabilityServer<br/>Configuration and lifecycle of both listeners"]
+        rest["AnimalRestServer<br/>JDK HttpServer + Gson<br/>Routing, strict JSON, HTTP status and Location"]
+        registration["AnimalRegistrationService<br/>Field validation and duplicate handling"]
+        animals["AnimalRepository<br/>Prepared INSERT and SELECT queries<br/>ID, date and farm filters"]
+        trace["TraceabilityService<br/>Existing gRPC validation and protobuf mapping"]
+        repository["TraceabilityRepository<br/>Batch-level joins and distinct results"]
+        reflection["gRPC reflection<br/>Contract discovery"]
+        database["Database<br/>DataSource, schema bootstrap<br/>Additive origin migration, optional demo seed"]
     end
-    client <-->|Direct protobuf RPC| service
-    client <-->|API discovery| reflection
-    bootstrap -->|Registers| service
+    http <-->|HTTP JSON| rest
+    rest --> registration
+    registration --> animals
+    animals <-->|JDBC| db
+    grpc <-->|Protobuf RPC| trace
+    grpc <-->|Discovery| reflection
+    trace --> repository
+    repository <-->|JDBC| db
+    bootstrap -->|Starts and stops| rest
+    bootstrap -->|Registers| trace
     bootstrap -->|Registers| reflection
     bootstrap -->|Initializes| database
-    service -->|Calls query methods| repository
-    repository <-->|JDBC SELECTs| db
-    database -->|DDL and optional seed transaction| db
-    broker -.->|Indirect event delivery| ingest
-    ingest -.->|Future idempotent projection writes| db
+    database -->|DDL and optional demo transaction| db
 ```
 
-Generated protobuf code forms the transport boundary. The repository returns Java records, keeping SQL independent of protobuf. `TraceabilityService` maps those records into response messages and translates failures to gRPC status codes. `TraceabilityClient` lives outside the central application and exercises the same public contract as other clients.
+`AnimalRegistration` is the REST data record. The REST adapter checks JSON syntax and types, decodes URLs, limits request bodies and maps application failures to JSON errors. The service validates registration rules; the repository owns SQL. Only the database enforces uniqueness, so simultaneous submissions cannot create duplicate animals. Every successful POST commits before returning `201 Created` with a `Location` header.
 
-## Decisions and limits
+Existing gRPC protobuf fields and traceability joins are unchanged. Origin is exposed by REST; old gRPC clients remain compatible. A newly registered animal with no parts returns an empty successful gRPC product lookup rather than `NOT_FOUND`.
 
-1. **Unary gRPC methods** match the two Part 2 lookups; one `.proto` defines messages and RPCs.
-2. **H2 and JDBC** provide a real persistent database without additional infrastructure for assessment.
-3. **Batch-level traceability** preserves the original model and conservatively includes every possible source animal. Reusing a tray creates a new batch identity.
-4. **Deterministic, distinct results** eliminate duplicates caused by multiple parts or source batches.
-5. **Offline stations remain a system requirement.** Local stores/outboxes and the broker are architecture only in this submission. Delivery deduplication, ordering, retries and synchronization visibility belong to a future ingestion implementation.
-6. **Local demonstration boundary.** Plaintext, reflection and a loopback listener simplify testing. TLS and authorization must protect the external recall interface before deployment. They are not claimed as implemented.
-7. **Scale.** Unary replies return all matches; pagination/streaming and connection pooling would be needed for much larger datasets. This implementation targets the coursework dataset.
+## Data changes and limits
+
+- `migration-v2.sql` adds nullable `animal.origin` and lookup indexes, safely on repeated startup. Existing records retain `origin: null`; new REST registrations require an origin.
+- The registration number is the animal identifier. Farm is an exact, case-sensitive string. Dates are calendar dates, without time zones; weights use decimal kilograms.
+- Both filters may be combined with AND semantics; collection replies are sorted by registration number. Existing records with unknown origin appear in date/all-record queries, but not a named farm query.
+- No graphical UI, update/delete endpoints, authentication, TLS, broker or offline queue is included. Default listeners are loopback-only. Production deployment needs authentication and TLS; larger datasets would need pagination and connection pooling.
+- Tray-batch traceability remains conservative: all products using a batch may involve any animal contributing to that batch. Reusing the physical tray with a new batch does not connect historical batches.
+
+Implementation references: [JDK HTTP server](https://docs.oracle.com/en/java/javase/21/docs/api/jdk.httpserver/com/sun/net/httpserver/HttpServer.html) and [Gson strict JSON configuration](https://javadoc.io/static/com.google.code.gson/gson/2.11.0/com.google.gson/com/google/gson/GsonBuilder.html).

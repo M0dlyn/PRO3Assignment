@@ -1,0 +1,322 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "PRO3 Animal Registration",
+    "version": "1.0.0",
+    "description": "Part 3 REST API. Origin is exact and case-sensitive. Filters combine with AND. UTF-8 JSON, 16 KiB request limit. Text rejects blank/padded/control-character values."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8080"
+    }
+  ],
+  "paths": {
+    "/api/animals": {
+      "get": {
+        "operationId": "listAnimals",
+        "summary": "Read animals, optionally by arrival date and/or origin",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "arrivalDate",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origin",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sorted matching animals; empty array if none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Animal"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "JSON error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "JSON error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "registerAnimal",
+        "summary": "Register a new animal",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Registration"
+              },
+              "example": {
+                "registrationNumber": "DK1001",
+                "arrivalDate": "2026-10-21",
+                "arrivalWeightKg": 120.125,
+                "origin": "North Farm",
+                "species": "pig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Animal registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Animal"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "Relative URL of the registered animal",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "JSON error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "JSON error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "JSON error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "JSON error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "JSON error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/animals/{registrationNumber}": {
+      "get": {
+        "operationId": "getAnimal",
+        "summary": "Read details of one animal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "registrationNumber",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Animal details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Animal"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "JSON error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "JSON error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "JSON error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Registration": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "registrationNumber",
+          "arrivalDate",
+          "arrivalWeightKg",
+          "origin"
+        ],
+        "properties": {
+          "registrationNumber": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "arrivalDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "arrivalWeightKg": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 999999999.999,
+            "multipleOf": 0.001
+          },
+          "origin": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "species": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "default": "unspecified"
+          }
+        }
+      },
+      "Animal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "registrationNumber",
+          "arrivalDate",
+          "arrivalWeightKg",
+          "origin",
+          "species"
+        ],
+        "properties": {
+          "registrationNumber": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "arrivalDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "arrivalWeightKg": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 999999999.999,
+            "multipleOf": 0.001
+          },
+          "origin": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "nullable": true,
+            "description": "Null only for legacy Part 2 records."
+          },
+          "species": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "default": "unspecified"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
