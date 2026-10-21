@@ -1,0 +1,26 @@
+syntax = "proto3";
+package traceability.v1;
+option java_package = "dk.via.pro3.proto";
+option java_multiple_files = true;
+
+// Conservative traceability through immutable tray batches, not exact picked parts.
+service TraceabilityService {
+  rpc GetAnimalsForProduct(ProductRequest) returns (AnimalsResponse);
+  rpc GetProductsForAnimal(AnimalRequest) returns (ProductsResponse);
+}
+message ProductRequest { string product_id = 1; }
+message AnimalRequest { string registration_number = 1; }
+message Animal {
+  string registration_number = 1;
+  string species = 2;
+  // Decimal text avoids binary floating-point rounding of recorded weights.
+  string arrival_weight_kg = 3;
+  string arrival_date = 4; // ISO 8601 date: YYYY-MM-DD.
+}
+message Product {
+  string product_id = 1;
+  string product_type = 2;
+  string packed_date = 3; // ISO 8601 date: YYYY-MM-DD.
+}
+message AnimalsResponse { repeated Animal animals = 1; }
+message ProductsResponse { repeated Product products = 1; }
