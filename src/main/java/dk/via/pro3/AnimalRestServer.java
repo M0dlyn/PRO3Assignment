@@ -91,7 +91,7 @@ public final class  AnimalRestServer implements AutoCloseable {
     }
 
     // A flat request parser rejects unknown/duplicate fields and wrong JSON types without coercion.
-    private static AnimalRegistration parse(byte[] body) {
+    public static AnimalRegistration parse(byte[] body) {
         try (var reader = new JsonReader(new StringReader(new String(body, StandardCharsets.UTF_8)))) {
             reader.setStrictness(Strictness.STRICT);
             var strings = new HashMap<String, String>();

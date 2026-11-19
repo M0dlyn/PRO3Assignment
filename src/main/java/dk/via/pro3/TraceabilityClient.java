@@ -16,6 +16,12 @@ public final class TraceabilityClient {
                 System.getenv().getOrDefault("GRPC_TARGET", "127.0.0.1:9090")).usePlaintext().build();
         try {
             var stub = TraceabilityServiceGrpc.newBlockingStub(channel).withDeadlineAfter(5, TimeUnit.SECONDS);
+            String token = System.getenv("RECALL_TOKEN");
+            if (token != null && !token.isBlank()) {
+                var headers = new io.grpc.Metadata();
+                headers.put(io.grpc.Metadata.Key.of("authorization", io.grpc.Metadata.ASCII_STRING_MARSHALLER), "Bearer " + token);
+                stub = stub.withInterceptors(io.grpc.stub.MetadataUtils.newAttachHeadersInterceptor(headers));
+            }
             if (args[0].equals("product")) {
                 var response = stub.getAnimalsForProduct(ProductRequest.newBuilder().setProductId(args[1]).build());
                 response.getAnimalsList().forEach(animal -> System.out.println(animal.getRegistrationNumber()));

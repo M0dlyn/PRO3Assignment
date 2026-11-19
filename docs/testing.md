@@ -116,3 +116,59 @@ Use [REST curl examples](rest-api.md) or import [openapi.json](openapi.json) int
 - The packaged gRPC client immediately recognized the REST-registered animal.
 - Stopping/restarting the application without demo seeding preserved all registration details.
 - Verification used Java 21 on macOS ARM64 and an isolated Maven dependency cache. Postman import/examples are supplied for manual use; Postman was not used for these checks.
+
+## Part 4 complete-system tests
+
+`SystemIntegrationTest` starts a real HTTP broker, independent receiving/cutting/packing/central databases, HTTP station APIs and an authenticated gRPC server. No mocked message broker or shared station database substitutes for the communication path.
+
+| Scenario | Evidence |
+| --- | --- |
+| Complete receiving → cutting → packing → central flow | Mixed-animal batches, multi-type recipe, multiple products, both recall directions |
+| Reused physical tray | Later batch traces only to its own animal/product |
+| Broker outages | Receiving/cutting continue using local data; packing works offline after receiving a closed batch |
+| Restart and recovery | Broker restarts with its retained log; station restarts retain outbox; all pending updates eventually reach central |
+| Durable local registration | Real file database shutdown/reopen retains domain record and unsent event |
+| Lost acknowledgement / duplicate event | Broker reaccepts same ID once; projections do not duplicate; changed payload for same ID rejected |
+| Bad projection or log gap | Transaction rolls back and cursor stays at last valid event |
+| Cutting invariants | Capacity boundary, type mismatch, unknown animal, animal total weight, closed/empty batches, premature tray reuse |
+| Packing invariants | Exact recipe, distinct known parts, closed batches, packing date, no reused stock |
+| Concurrent packing | Two requests for the same part produce exactly one success and one conflict |
+| Transaction rollback | Invalid recipe leaves no partial recipe, requirement rows or outgoing event |
+| Ownership and validation | Wrong station rejected; receiving filters retained; bad JSON/route/method rejected |
+| Authentication | Broker and central HTTP reject unauthenticated clients; gRPC requires a valid recall bearer token |
+| Background delivery | Scheduled pollers deliver without explicit synchronization calls from operator requests |
+
+Run `mvn clean verify` for all parts. Original tests still cover their legacy modes and contracts. Part 4 tests use ephemeral ports; the standalone launcher uses the documented default ports. Tests intentionally induce outages and database failures, so expected warning logs may appear.
+
+### Manual whole-system assessment
+
+1. Build and launch `scripts/run-system.sh`.
+2. Run `python3 scripts/demo.py`; inspect the resulting product, inventory and central status.
+3. Use its printed authenticated Java gRPC command to retrieve affected products.
+4. For separate-process outage demonstrations, follow [operations.md](operations.md), stopping only the broker and keeping station APIs running.
+5. Stop/restart all processes with the same data paths and verify stored products and recalls still exist.
+
+### Part 4 requirement mapping
+
+| Requirement | Delivered implementation |
+| --- | --- |
+| Three subsystems | Independent receiving, cutting and packing processes, role-owned commands and persistent local stores |
+| Receiving | Animal registration plus ID/date/origin reads |
+| Cutting | Part weighing/source links, typed/capacity-limited trays, immutable batch closure and safe reuse |
+| Packing | Product recipes, quantity/type checks, unique stock allocation and recorded source trays/batches |
+| External recall | Authenticated gRPC service over central SQL projection, both traceability directions |
+| Independent operation under outages | Transactional local outboxes, durable broker, replay/deduplication and persisted consumer offsets |
+| Updated documentation | README, API contract, domain/database design, operating guide and test coverage |
+| Updated C1/C2/C3 | docs/architecture.md including station, broker and central component views |
+| Test everything without GUI | Real HTTP/gRPC integration tests, executable demo and outage walkthrough |
+
+### Recorded Part 4 verification — 2026-11-18
+
+- Clean Maven verify under Amazon Corretto **Java 21**: **42 tests passed**, 0 failures, 0 errors, 0 skipped (13 full-system + 16 Part 3 REST + 13 Part 2 gRPC). The suite also passed under the local Maven default JDK 25.
+- Packaged launcher started all five independent Java processes using isolated persistent database files.
+- `scripts/demo.py` completed receiving → cutting → packing → central synchronization using HTTP requests.
+- Authenticated packaged Java gRPC client returned both expected affected products for the shared-batch animal.
+- Stopping and restarting the complete packaged system preserved the product and its part/batch references.
+- Shell syntax and Python compilation checks passed for the launcher/demo; OpenAPI JSON references and current documentation file links were checked.
+
+The packaged demonstration ran on macOS ARM64 with Java 21. Maven used an isolated dependency cache. Postman instructions/contracts are provided but Postman itself was not used for this verification. GitHub Actions will run after you commit and push.

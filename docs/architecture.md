@@ -1,95 +1,162 @@
-# Architecture — Parts 2 and 3
+# C4 architecture — completed system, Part 4
 
-Part 3 adds animal registration and lookup over REST. The existing gRPC traceability interface remains available. Both interfaces run in one Java process and share a persistent H2 database. The [Part 2 views](architecture-part2.md) and [original Part 1 diagrams](part1/) are retained for comparison.
+The three station services now implement the full operational workflow. Each has its own persistent local database and outgoing queue. Indirect event delivery connects them through a durable broker; the central application serves external recall queries over gRPC. HTTP clients replace a GUI for assessment.
 
 ## C1 — System context
 
 ```mermaid
 flowchart LR
-    receiving["Receiving operator<br/>Registers animal arrival, weight, number and farm<br/>Looks up registrations"]
-    cutting["Cutting operator<br/>Registers parts and tray batches"]
-    packing["Packing operator<br/>Registers products and source batches"]
-    external["External recall user<br/>Finds possible animal origins and affected products"]
-    system["Slaughterhouse System<br/>Animal registration and traceability"]
-    receiving <-->|Registers and reads animal details by ID, date or farm| system
-    cutting -->|Part and batch registration - future| system
-    packing -->|Product registration - future| system
-    external <-->|Traceability requests and results| system
+    receiving["Receiving operator<br/>Weighs and registers animals and farm origins"]
+    cutting["Cutting operator<br/>Weighs parts; fills and closes tray batches"]
+    packing["Packing operator<br/>Defines recipes and packs products"]
+    recall["Authorized external recall user"]
+    system["Slaughterhouse System<br/>Receiving, cutting, packing and traceability"]
+    receiving <-->|Registers and looks up animals| system
+    cutting <-->|Registers parts, trays and batch completion| system
+    packing <-->|Registers products and views available parts| system
+    recall <-->|Requests animal origins or affected products| system
 ```
 
-The receiving use cases now have a working REST API; no graphical UI is required. External authorization remains a deployment requirement, not a feature implemented in this coursework demo.
-
-## C2 — Container view
+## C2 — Containers and communication
 
 ```mermaid
 flowchart TB
-    operator[Receiving operator]
-    recall[Recall user]
-    restClient["REST client<br/>curl, Postman or HTTP client<br/>Direct registration and lookup today"]
-    grpcClient["gRPC client<br/>Bundled Java client or Postman"]
+    ro[Receiving operator / HTTP client]
+    co[Cutting operator / HTTP client]
+    po[Packing operator / HTTP client]
+    recall[External gRPC recall client]
     subgraph system[Slaughterhouse System]
-        app["Registration and traceability application<br/>One Java 21 process<br/>REST HTTP JSON :8080 - Part 3<br/>gRPC HTTP/2 :9090 - Part 2"]
-        db[("Shared H2 database<br/>Embedded in application process<br/>Persistent file storage")]
-        station["Offline station applications<br/>Receiving, cutting and packing<br/>Planned"]
-        local[("Station-local storage and outboxes<br/>Planned")]
-        broker["Message broker<br/>Planned"]
+        receiving["Receiving service<br/>Java HTTP JSON :8081"]
+        cutting["Cutting service<br/>Java HTTP JSON :8082"]
+        packing["Packing service<br/>Java HTTP JSON :8083"]
+        rdb[("Receiving H2 file<br/>Local records, inbox, outbox, cursor")]
+        cdb[("Cutting H2 file<br/>Local records, inbox, outbox, cursor")]
+        pdb[("Packing H2 file<br/>Local records, inbox, outbox, cursor")]
+        broker["Durable message broker<br/>Java HTTP :8070<br/>Append, deduplicate and replay"]
+        log[("Broker H2 file<br/>Append-only event log")]
+        central["Central application<br/>gRPC :9090<br/>Read-only HTTP/status :8084"]
+        db[("Central H2 file<br/>Traceability projection, inbox and cursor")]
     end
-    operator --> restClient
-    restClient <-->|Direct HTTP JSON| app
-    recall --> grpcClient
-    grpcClient <-->|Direct protobuf RPC| app
-    app <-->|Direct JDBC queries and registration inserts| db
-    station <-->|Local reads and writes - planned| local
-    station -.->|Indirect queued updates on reconnection - planned| broker
-    broker -.->|Event projection consumer - planned| app
+    ro <-->|Direct HTTP requests and replies| receiving
+    co <-->|Direct HTTP requests and replies| cutting
+    po <-->|Direct HTTP requests and replies| packing
+    receiving <-->|Local JDBC transactions| rdb
+    cutting <-->|Local JDBC transactions| cdb
+    packing <-->|Local JDBC transactions| pdb
+    receiving -.->|Indirect events from durable outbox| broker
+    cutting -.->|Indirect events from durable outbox| broker
+    packing -.->|Indirect events from durable outbox| broker
+    broker -.->|Ordered replay over polling HTTP| receiving
+    broker -.->|Ordered replay over polling HTTP| cutting
+    broker -.->|Ordered replay over polling HTTP| packing
+    broker -.->|Ordered replay over polling HTTP| central
+    broker <-->|Durable JDBC append and reads| log
+    central <-->|Local JDBC reads and projection writes| db
+    recall <-->|Direct authenticated gRPC| central
 ```
 
-**Deployment decision:** rather than opening the same embedded database file from two separate processes, both APIs share one application and `DataSource`. A REST registration is immediately visible to the gRPC service. H2 is drawn as a logical data store; it does not require a separate server. HTTP and gRPC handlers use separate threads and short-lived JDBC connections.
+There are five independent JVM processes and five private database files. H2 stores are logical data containers embedded in their owning process, not separately networked database servers. No station command calls another station or central service. Each station keeps a full local projection of the event stream in this small system; only the owner of an operation can write new business events.
 
-**Offline boundary:** the Part 1 station-local storage, outbox and broker architecture remains future work. This Part 3 REST implementation requires a reachable server to register an animal. It does not claim to satisfy the entire system's offline station workflow. Future ingestion must validate and deduplicate events and preserve tray-batch history; recall results remain limited to records already in the central database.
+The custom broker provides durable fan-out over HTTP. Operator REST calls are direct; business updates are indirect because producers enqueue events without waiting for consumers. Broker acknowledgement confirms durable storage, not completion at every replica.
 
-## C3 — Application components
+## C3 — Station components
+
+The same station executable is configured with a receiving, cutting or packing role. The role determines allowed commands; its database persists the role to prevent accidental reuse.
 
 ```mermaid
 flowchart TB
-    http["REST client"]
-    grpc["gRPC client"]
-    db[(H2 database)]
-    subgraph app[Registration and traceability application]
-        bootstrap["TraceabilityServer<br/>Configuration and lifecycle of both listeners"]
-        rest["AnimalRestServer<br/>JDK HttpServer + Gson<br/>Routing, strict JSON, HTTP status and Location"]
-        registration["AnimalRegistrationService<br/>Field validation and duplicate handling"]
-        animals["AnimalRepository<br/>Prepared INSERT and SELECT queries<br/>ID, date and farm filters"]
-        trace["TraceabilityService<br/>Existing gRPC validation and protobuf mapping"]
-        repository["TraceabilityRepository<br/>Batch-level joins and distinct results"]
-        reflection["gRPC reflection<br/>Contract discovery"]
-        database["Database<br/>DataSource, schema bootstrap<br/>Additive origin migration, optional demo seed"]
+    operator[Operator HTTP client]
+    broker[Durable broker]
+    db[(Private local H2 database)]
+    subgraph station[Receiving / cutting / packing JVM]
+        main["SystemMain<br/>Role, configuration and lifecycle"]
+        http["StationServer / HttpApi<br/>Routing, JSON, status and optional bearer auth"]
+        store["StationStore<br/>Atomic commands and projections<br/>Inbox/outbox/cursor transactions"]
+        domain["Domain<br/>Registration, tray/batch rules<br/>Recipe and inventory validation"]
+        animals["AnimalRegistrationService / AnimalRepository<br/>Existing validation and animal reads"]
+        sync["SyncWorker<br/>Timed publisher and replay consumer<br/>Retry and lag diagnostics"]
     end
-    http <-->|HTTP JSON| rest
-    rest --> registration
-    registration --> animals
-    animals <-->|JDBC| db
-    grpc <-->|Protobuf RPC| trace
-    grpc <-->|Discovery| reflection
-    trace --> repository
-    repository <-->|JDBC| db
-    bootstrap -->|Starts and stops| rest
-    bootstrap -->|Registers| trace
-    bootstrap -->|Registers| reflection
-    bootstrap -->|Initializes| database
-    database -->|DDL and optional demo transaction| db
+    operator <-->|Direct REST| http
+    main --> http
+    main --> sync
+    main --> store
+    http -->|Owner-checked command or local read| store
+    http -->|Animal validation and lookup| animals
+    store -->|Within transaction| domain
+    store <-->|Records and durable event state| db
+    domain <-->|Prepared SQL| db
+    animals <-->|Local reads| db
+    sync <-->|Pending events and atomic replay| store
+    sync -.->|Publish and poll; retries on failure| broker
 ```
 
-`AnimalRegistration` is the REST data record. The REST adapter checks JSON syntax and types, decodes URLs, limits request bodies and maps application failures to JSON errors. The service validates registration rules; the repository owns SQL. Only the database enforces uniqueness, so simultaneous submissions cannot create duplicate animals. Every successful POST commits before returning `201 Created` with a `Location` header.
+| Station role | Domain commands | Key invariants |
+| --- | --- | --- |
+| Receiving | Register animal | Unique registration number; valid date, farm and positive decimal weight |
+| Cutting | Create tray, open batch, register part, close batch | One part type; capacity; source animal; no late batch changes; tray empty before reuse |
+| Packing | Define recipe, pack product | Exact required quantities/types; only closed batches; each part allocated at most once |
 
-Existing gRPC protobuf fields and traceability joins are unchanged. Origin is exposed by REST; old gRPC clients remain compatible. A newly registered animal with no parts returns an empty successful gRPC product lookup rather than `NOT_FOUND`.
+The local node-state row lock serializes commands and projection transactions. A successful command applies domain changes, records its inbox identity and adds its outgoing event in one commit. A rejected operation rolls everything back. Read endpoints return local data immediately, regardless of broker reachability.
 
-## Data changes and limits
+## C3 — Broker components
 
-- `migration-v2.sql` adds nullable `animal.origin` and lookup indexes, safely on repeated startup. Existing records retain `origin: null`; new REST registrations require an origin.
-- The registration number is the animal identifier. Farm is an exact, case-sensitive string. Dates are calendar dates, without time zones; weights use decimal kilograms.
-- Both filters may be combined with AND semantics; collection replies are sorted by registration number. Existing records with unknown origin appear in date/all-record queries, but not a named farm query.
-- No graphical UI, update/delete endpoints, authentication, TLS, broker or offline queue is included. Default listeners are loopback-only. Production deployment needs authentication and TLS; larger datasets would need pagination and connection pooling.
-- Tray-batch traceability remains conservative: all products using a batch may involve any animal contributing to that batch. Reusing the physical tray with a new batch does not connect historical batches.
+```mermaid
+flowchart LR
+    producers[Station SyncWorkers]
+    consumers[Station and central SyncWorkers]
+    subgraph broker[Broker JVM]
+        main[SystemMain]
+        http["HttpApi<br/>Bearer authentication and HTTP routing"]
+        service["BrokerServer<br/>Envelope validation<br/>Idempotent append and ordered replay"]
+        log[("H2 event_log + broker_state<br/>Unique event ID and committed sequence")]
+    end
+    main --> http
+    producers -->|POST event| http
+    consumers -->|GET events after cursor| http
+    http --> service
+    service <-->|Commit-order lock and SQL transactions| log
+```
 
-Implementation references: [JDK HTTP server](https://docs.oracle.com/en/java/javase/21/docs/api/jdk.httpserver/com/sun/net/httpserver/HttpServer.html) and [Gson strict JSON configuration](https://javadoc.io/static/com.google.code.gson/gson/2.11.0/com.google.gson/com/google/gson/GsonBuilder.html).
+The broker does not interpret inventory or call consumers synchronously. An identical retry returns the original sequence; a changed event with the same ID is rejected. The append lock prevents visible offset gaps caused by concurrent commits. The entire log is retained for replay.
+
+## C3 — Central components
+
+```mermaid
+flowchart TB
+    client[External recall client]
+    monitor[HTTP read/status client]
+    broker[Durable broker]
+    db[(Central H2 projection)]
+    subgraph central[Central JVM]
+        main[SystemMain]
+        auth["RecallAuth<br/>gRPC bearer-token interceptor"]
+        grpc["TraceabilityService<br/>Part 2 protobuf contract"]
+        repo["TraceabilityRepository<br/>Conservative batch-level SQL joins"]
+        http["StationServer in central role<br/>Authenticated reads; rejects commands"]
+        sync["SyncWorker<br/>Consumes broker events"]
+        store["StationStore + Domain<br/>Transactional projection and inbox/cursor"]
+    end
+    main --> auth
+    main --> http
+    main --> sync
+    client <-->|Authenticated gRPC| auth
+    auth --> grpc
+    grpc --> repo
+    repo <-->|Local SQL queries| db
+    monitor <-->|Authenticated HTTP| http
+    http --> store
+    http -->|Lag/error status| sync
+    sync -.->|Replay requests| broker
+    sync --> store
+    store <-->|Atomic projection writes| db
+```
+
+The original traceability contract is unchanged. Detailed product-part allocations now protect inventory, while recalls still join through source batches as in the Part 1 model. Reusing a tray never connects new batches to old products.
+
+## Consistency and scope
+
+Stations can operate offline with locally known dependencies, and persist outgoing changes until the broker returns. A newly arrived animal cannot be used at cutting before that registration reaches cutting; similarly packing must first receive a closed batch. There is no invented fallback data.
+
+Synchronization status distinguishes queued writes, local replay position and the last observed broker position. It does not claim global recall completeness while any station may hold unpublished events. The implementation supports one writer process per role, multiple concurrent operator requests, and independent restarts. It includes bearer protection for internal broker access and external recall; default transport is local plaintext. Deployment/security and operational boundaries are documented in [operations.md](operations.md).
+
+Earlier snapshots: [Part 2](architecture-part2.md), [Part 3](architecture-part3.md), and [original Part 1](part1/).

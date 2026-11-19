@@ -1,4 +1,3 @@
--- Synthetic data. Never represents real animals, customers or shipments.
 INSERT INTO animal (registration_number, species, arrival_weight_kg, arrival_date, origin) VALUES
  ('A001', 'pig', 120.000, DATE '2026-10-01', 'North Farm'),
  ('A002', 'pig', 125.000, DATE '2026-10-01', 'South Farm'),

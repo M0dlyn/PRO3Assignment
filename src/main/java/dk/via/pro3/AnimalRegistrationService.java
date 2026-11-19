@@ -12,6 +12,20 @@ public final class AnimalRegistrationService {
     public AnimalRegistrationService(AnimalRepository repository) { this.repository = repository; }
 
     public AnimalRegistration register(AnimalRegistration input) throws SQLException {
+        var animal = validate(input);
+        try {
+            repository.insert(animal);
+        } catch (SQLException exception) {
+            // A database primary key also resolves concurrent duplicate submissions atomically.
+            if ("23505".equals(exception.getSQLState())) {
+                throw new ApiException(409, "Animal registration number already exists");
+            }
+            throw exception;
+        }
+        return animal;
+    }
+
+    public static AnimalRegistration validate(AnimalRegistration input) {
         text(input.registrationNumber(), "registrationNumber", 100);
         date(input.arrivalDate());
         text(input.origin(), "origin", 200);
@@ -25,15 +39,6 @@ public final class AnimalRegistrationService {
         }
         var animal = new AnimalRegistration(input.registrationNumber(), input.arrivalDate(),
                 weight.setScale(3), input.origin(), species);
-        try {
-            repository.insert(animal);
-        } catch (SQLException exception) {
-            // A database primary key also resolves concurrent duplicate submissions atomically.
-            if ("23505".equals(exception.getSQLState())) {
-                throw new ApiException(409, "Animal registration number already exists");
-            }
-            throw exception;
-        }
         return animal;
     }
 
